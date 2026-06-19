@@ -21,11 +21,74 @@ const LegalProcessDashboardV3 = () => {
   const [newClient, setNewClient] = useState({ name: '', email: '' });
   const [newProcessNumber, setNewProcessNumber] = useState('');
   const [selectedClientForProcess, setSelectedClientForProcess] = useState('');
+  const [newProcessNotes, setNewProcessNotes] = useState('');
 
   const [showShareModal, setShowShareModal] = useState(null);
   const [showEditPassword, setShowEditPassword] = useState(false);
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+
+  // ===== STORAGE FUNCTIONS =====
+  const safeGetItem = (key) => {
+    try {
+      return localStorage.getItem(key);
+    } catch (e) {
+      console.error('Erro ao ler localStorage:', e);
+      return null;
+    }
+  };
+
+  const safeSetItem = (key, value) => {
+    try {
+      localStorage.setItem(key, value);
+      return true;
+    } catch (e) {
+      console.error('Erro ao salvar localStorage:', e);
+      return false;
+    }
+  };
+
+  // ===== COPY TO CLIPBOARD =====
+  const copyToClipboard = async (text, feedbackMsg) => {
+    try {
+      // Tenta método moderno
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(text);
+        alert(`✅ ${feedbackMsg}`);
+        return;
+      }
+    } catch (err) {
+      console.log('Método clipboard falhou, usando fallback');
+    }
+
+    // Fallback para navegadores antigos / mobile
+    try {
+      const textArea = document.createElement('textarea');
+      textArea.value = text;
+      textArea.style.position = 'fixed';
+      textArea.style.left = '-999999px';
+      textArea.style.top = '-999999px';
+      document.body.appendChild(textArea);
+      
+      if (textArea.select) {
+        textArea.select();
+      } else if (textArea.setSelectionRange) {
+        textArea.setSelectionRange(0, text.length);
+      }
+      
+      const success = document.execCommand('copy');
+      document.body.removeChild(textArea);
+      
+      if (success) {
+        alert(`✅ ${feedbackMsg}`);
+      } else {
+        // Se tudo falhar, mostra o texto para copiar manualmente
+        alert(`📋 Cole isto:\n\n${text}`);
+      }
+    } catch (err) {
+      alert(`📋 Cole isto:\n\n${text}`);
+    }
+  };
 
   // Check backend
   useEffect(() => {
@@ -34,37 +97,50 @@ const LegalProcessDashboardV3 = () => {
 
   // Initialize
   useEffect(() => {
-    const stored = localStorage.getItem('legalProcessV3');
+    const stored = safeGetItem('legalProcessV3');
     if (stored) {
-      const data = JSON.parse(stored);
-      setClients(data.clients || []);
-      setProcesses(data.processes || []);
-      setAdminPassword(data.adminPassword || '1234');
+      try {
+        const data = JSON.parse(stored);
+        setClients(data.clients || []);
+        setProcesses(data.processes || []);
+        setAdminPassword(data.adminPassword || '1234');
+      } catch (e) {
+        console.error('Erro ao carregar dados:', e);
+      }
     }
 
-    const storedUrl = localStorage.getItem('backendUrlV3');
+    const storedUrl = safeGetItem('backendUrlV3');
     if (storedUrl) {
       setBackendUrl(storedUrl);
       setNewBackendUrl(storedUrl);
     }
   }, []);
 
-  // Save
+  // Save - MELHORADO
   useEffect(() => {
     if (clients.length > 0 || processes.length > 0) {
-      localStorage.setItem('legalProcessV3', JSON.stringify({
+      const dataToSave = {
         clients,
         processes,
         adminPassword
-      }));
-      localStorage.setItem('backendUrlV3', backendUrl);
+      };
+      safeSetItem('legalProcessV3', JSON.stringify(dataToSave));
     }
+    safeSetItem('backendUrlV3', backendUrl);
   }, [clients, processes, adminPassword, backendUrl]);
 
   const checkBackendConnection = async () => {
     try {
       setBackendStatus('checking');
-      const response = await fetch(`${backendUrl}/health`);
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
+      
+      const response = await fetch(`${backendUrl}/health`, {
+        signal: controller.signal
+      });
+      
+      clearTimeout(timeoutId);
+      
       if (response.ok) {
         setBackendStatus('connected');
       } else {
@@ -85,26 +161,53 @@ const LegalProcessDashboardV3 = () => {
     }
 
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => {
+        controller.abort();
+      }, 12000); // 12 segundos
+
       const response = await fetch(`${backendUrl}/api/search-process`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ processNumber: numero })
+        body: JSON.stringify({ processNumber: numero }),
+        signal: controller.signal
       });
 
+      clearTimeout(timeoutId);
+
       if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Erro ao buscar');
+        const errorText = await response.text();
+        try {
+          const error = JSON.parse(errorText);
+          throw new Error(error.error || 'Erro ao buscar processo');
+        } catch {
+          throw new Error('Erro: Processo não encontrado ou servidor indisponível');
+        }
       }
 
-      return await response.json();
+      const data = await response.json();
+      return data;
     } catch (error) {
-      throw new Error(`Erro: ${error.message}`);
+      if (error.name === 'AbortError') {
+        throw new Error('⏱️ A busca demorou muito. Tente novamente.');
+      }
+      throw new Error(`❌ ${error.message}`);
     }
   };
 
   const handleSaveSettings = () => {
-    setBackendUrl(newBackendUrl);
-    setShowSettings(false);
+    // Força salvamento
+    const saved = safeSetItem('backendUrlV3', newBackendUrl);
+    
+    if (saved) {
+      setBackendUrl(newBackendUrl);
+      setShowSettings(false);
+      // Pequeno delay para reconectar
+      setTimeout(() => checkBackendConnection(), 500);
+      alert('✅ URL salva com sucesso!');
+    } else {
+      alert('❌ Erro ao salvar. Tente novamente.');
+    }
   };
 
   // Add client
@@ -117,14 +220,29 @@ const LegalProcessDashboardV3 = () => {
         token: generateToken(),
         createdAt: new Date().toLocaleDateString('pt-BR')
       };
-      setClients([...clients, client]);
+      const newClients = [...clients, client];
+      setClients(newClients);
+      // Force save
+      safeSetItem('legalProcessV3', JSON.stringify({
+        clients: newClients,
+        processes,
+        adminPassword
+      }));
       setNewClient({ name: '', email: '' });
     }
   };
 
   const handleDeleteClient = (id) => {
-    setClients(clients.filter(c => c.id !== id));
-    setProcesses(processes.filter(p => p.clientId !== id));
+    const newClients = clients.filter(c => c.id !== id);
+    const newProcesses = processes.filter(p => p.clientId !== id);
+    setClients(newClients);
+    setProcesses(newProcesses);
+    // Force save
+    safeSetItem('legalProcessV3', JSON.stringify({
+      clients: newClients,
+      processes: newProcesses,
+      adminPassword
+    }));
   };
 
   // Search and add process
@@ -145,20 +263,30 @@ const LegalProcessDashboardV3 = () => {
       const process = {
         id: generateToken(),
         clientId: selectedClientForProcess,
+        advogadoNotes: newProcessNotes,
         ...processData,
         createdAt: new Date().toISOString()
       };
 
-      setProcesses([...processes, process]);
+      const newProcesses = [...processes, process];
+      setProcesses(newProcesses);
+      // Force save
+      safeSetItem('legalProcessV3', JSON.stringify({
+        clients,
+        processes: newProcesses,
+        adminPassword
+      }));
+
       setNewProcessNumber('');
       setSelectedClientForProcess('');
+      setNewProcessNotes('');
       setSearchStatus(prev => ({ ...prev, [searchId]: 'success' }));
       
       setTimeout(() => {
         setSearchStatus(prev => ({ ...prev, [searchId]: null }));
       }, 3000);
     } catch (error) {
-      alert(`Erro: ${error.message}`);
+      alert(`${error.message}`);
       setSearchStatus(prev => ({ ...prev, [searchId]: 'error' }));
     } finally {
       setLoading(false);
@@ -174,21 +302,36 @@ const LegalProcessDashboardV3 = () => {
 
     try {
       const updated = await searchProcessData(process.numero);
-      setProcesses(processes.map(p => p.id === processId ? { ...p, ...updated, id: processId } : p));
+      const newProcesses = processes.map(p => p.id === processId ? { ...p, ...updated, id: processId } : p);
+      setProcesses(newProcesses);
+      // Force save
+      safeSetItem('legalProcessV3', JSON.stringify({
+        clients,
+        processes: newProcesses,
+        adminPassword
+      }));
+
       setSearchStatus(prev => ({ ...prev, [processId]: 'refreshed' }));
       
       setTimeout(() => {
         setSearchStatus(prev => ({ ...prev, [processId]: null }));
       }, 3000);
     } catch (error) {
-      alert(`Erro: ${error.message}`);
+      alert(`${error.message}`);
     } finally {
       setLoading(false);
     }
   };
 
   const handleDeleteProcess = (id) => {
-    setProcesses(processes.filter(p => p.id !== id));
+    const newProcesses = processes.filter(p => p.id !== id);
+    setProcesses(newProcesses);
+    // Force save
+    safeSetItem('legalProcessV3', JSON.stringify({
+      clients,
+      processes: newProcesses,
+      adminPassword
+    }));
   };
 
   const handleChangePassword = (e) => {
@@ -202,6 +345,12 @@ const LegalProcessDashboardV3 = () => {
       return;
     }
     setAdminPassword(newPassword);
+    // Force save
+    safeSetItem('legalProcessV3', JSON.stringify({
+      clients,
+      processes,
+      adminPassword: newPassword
+    }));
     setNewPassword('');
     setConfirmPassword('');
     setShowEditPassword(false);
@@ -214,19 +363,22 @@ const LegalProcessDashboardV3 = () => {
       setMode('admin');
       setAdminPassInput('');
     } else {
-      alert('Senha incorreta');
+      alert('❌ Senha incorreta');
     }
   };
 
   const handleClientAccess = (e) => {
     e.preventDefault();
+    console.log('Buscando cliente com token:', clientToken);
+    console.log('Clientes disponíveis:', clients.map(c => ({ nome: c.name, token: c.token })));
+    
     const client = clients.find(c => c.token === clientToken);
     if (client) {
       setCurrentClient(client);
       setMode('client');
       setClientToken('');
     } else {
-      alert('Código inválido');
+      alert('❌ Código inválido');
     }
   };
 
@@ -264,7 +416,6 @@ const LegalProcessDashboardV3 = () => {
       <div className="min-h-screen bg-gradient-to-br from-blue-900 via-slate-900 to-slate-900 flex items-center justify-center p-4">
         <div className="w-full max-w-md">
           <div className="bg-white rounded-lg shadow-2xl p-8 relative">
-            {/* Botão Configurações */}
             <button
               onClick={() => setShowSettings(true)}
               className="absolute top-4 right-4 p-2 hover:bg-gray-100 rounded-full transition"
@@ -276,7 +427,7 @@ const LegalProcessDashboardV3 = () => {
             <div className="text-center mb-8">
               <Lock className="w-12 h-12 text-blue-700 mx-auto mb-3" />
               <h1 className="text-3xl font-bold text-slate-900">Portal Jurídico</h1>
-              <p className="text-slate-600 text-sm mt-2">v3.0 - Informações Completas</p>
+              <p className="text-slate-600 text-sm mt-2">v5.0 - Corrigido</p>
             </div>
 
             <div className="mb-6 p-3 rounded-lg border-2 flex items-center gap-2 text-sm" 
@@ -371,11 +522,11 @@ const LegalProcessDashboardV3 = () => {
                     type="text"
                     value={newBackendUrl}
                     onChange={(e) => setNewBackendUrl(e.target.value)}
-                    placeholder="https://legal-app-backend-8jxx.onrender.com"
+                    placeholder="https://legal-app-backend-xxxxx.onrender.com"
                     className="w-full px-3 py-2 border border-slate-300 rounded focus:ring-2 focus:ring-blue-700 outline-none text-sm"
                   />
                   <p className="text-xs text-slate-600 mt-2">
-                    Cole a URL do seu Render aqui
+                    Cole a URL do seu backend aqui
                   </p>
                 </div>
 
@@ -387,7 +538,10 @@ const LegalProcessDashboardV3 = () => {
                     Salvar
                   </button>
                   <button
-                    onClick={() => setShowSettings(false)}
+                    onClick={() => {
+                      setShowSettings(false);
+                      setNewBackendUrl(backendUrl);
+                    }}
                     className="flex-1 bg-slate-300 hover:bg-slate-400 text-slate-900 font-semibold py-2 rounded transition"
                   >
                     Cancelar
@@ -396,9 +550,9 @@ const LegalProcessDashboardV3 = () => {
 
                 <div className="p-3 bg-blue-50 rounded border border-blue-200 text-xs text-blue-900">
                   <p className="font-semibold mb-1">💡 Dica:</p>
-                  <p>Cole a URL do seu backend Render aqui. Exemplo:</p>
-                  <code className="bg-white px-2 py-1 rounded block mt-1 break-all">
-                    https://legal-app-backend-8jxx.onrender.com
+                  <p>Cole a URL do seu backend Render aqui:</p>
+                  <code className="bg-white px-2 py-1 rounded block mt-1 break-all text-xs">
+                    https://legal-app-backend-xxxxx.onrender.com
                   </code>
                 </div>
               </div>
@@ -417,7 +571,7 @@ const LegalProcessDashboardV3 = () => {
           <div className="max-w-6xl mx-auto px-6 py-4 flex justify-between items-center">
             <div>
               <h1 className="text-2xl font-bold text-slate-900">Painel do Advogado</h1>
-              <p className="text-slate-600 text-sm">v3.0 - Busca Completa</p>
+              <p className="text-slate-600 text-sm">v5.0 - Corrigido</p>
             </div>
             <div className="flex gap-3 items-center">
               <button
@@ -491,8 +645,8 @@ const LegalProcessDashboardV3 = () => {
 
         {/* Modal Compartilhar */}
         {showShareModal && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-lg shadow-lg p-6 w-full max-w-lg max-h-96 overflow-y-auto">
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4 overflow-y-auto">
+            <div className="bg-white rounded-lg shadow-lg p-6 w-full max-w-lg my-8">
               <h2 className="text-xl font-bold text-slate-900 mb-4">Compartilhar com {showShareModal.name}</h2>
               
               {(() => {
@@ -506,11 +660,8 @@ const LegalProcessDashboardV3 = () => {
                           {code}
                         </code>
                         <button
-                          onClick={() => {
-                            navigator.clipboard.writeText(code);
-                            alert('✅ Código copiado!');
-                          }}
-                          className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded"
+                          onClick={() => copyToClipboard(code, 'Código copiado!')}
+                          className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded flex items-center justify-center"
                         >
                           <Copy size={16} />
                         </button>
@@ -522,13 +673,10 @@ const LegalProcessDashboardV3 = () => {
                       <textarea
                         readOnly
                         value={whatsappMessage}
-                        className="w-full px-3 py-2 rounded border border-slate-300 font-mono text-xs h-24 bg-white"
+                        className="w-full px-3 py-2 rounded border border-slate-300 font-mono text-xs h-24 bg-white resize-none"
                       />
                       <button
-                        onClick={() => {
-                          navigator.clipboard.writeText(whatsappMessage);
-                          alert('✅ Mensagem copiada!');
-                        }}
+                        onClick={() => copyToClipboard(whatsappMessage, 'Mensagem WhatsApp copiada!')}
                         className="w-full mt-2 bg-green-600 hover:bg-green-700 text-white font-semibold py-2 rounded flex items-center justify-center gap-2"
                       >
                         <Copy size={16} />
@@ -541,13 +689,10 @@ const LegalProcessDashboardV3 = () => {
                       <textarea
                         readOnly
                         value={emailMessage}
-                        className="w-full px-3 py-2 rounded border border-slate-300 font-mono text-xs h-24 bg-white"
+                        className="w-full px-3 py-2 rounded border border-slate-300 font-mono text-xs h-24 bg-white resize-none"
                       />
                       <button
-                        onClick={() => {
-                          navigator.clipboard.writeText(emailMessage);
-                          alert('✅ Mensagem copiada!');
-                        }}
+                        onClick={() => copyToClipboard(emailMessage, 'Mensagem Email copiada!')}
                         className="w-full mt-2 bg-purple-600 hover:bg-purple-700 text-white font-semibold py-2 rounded flex items-center justify-center gap-2"
                       >
                         <Copy size={16} />
@@ -651,8 +796,16 @@ const LegalProcessDashboardV3 = () => {
                     className="w-full px-3 py-2 border border-slate-300 rounded focus:ring-2 focus:ring-blue-700 outline-none text-sm font-mono"
                   />
 
+                  <textarea
+                    placeholder="Notas do advogado (observações, instruções, etc.)"
+                    value={newProcessNotes}
+                    onChange={(e) => setNewProcessNotes(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-300 rounded focus:ring-2 focus:ring-blue-700 outline-none text-sm resize-none"
+                    rows="3"
+                  />
+
                   <div className="bg-blue-50 p-3 rounded border border-blue-200 text-xs text-blue-900">
-                    💡 Informações do processo serão preenchidas automaticamente!
+                    💡 Aguarde até 12 segundos para resposta da CNJ
                   </div>
 
                   <button
@@ -805,6 +958,15 @@ const LegalProcessDashboardV3 = () => {
                         </div>
                       )}
                     </div>
+
+                    {process.advogadoNotes && (
+                      <div className="mb-6 p-4 bg-orange-50 rounded-lg border border-orange-200">
+                        <p className="text-xs font-semibold text-slate-700 uppercase mb-2 flex items-center gap-2">
+                          📝 Observações do Advogado
+                        </p>
+                        <p className="text-slate-700 leading-relaxed text-sm whitespace-pre-wrap">{process.advogadoNotes}</p>
+                      </div>
+                    )}
 
                     {process.summary && (
                       <div className="mb-6 p-4 bg-blue-50 rounded-lg border border-blue-200">
