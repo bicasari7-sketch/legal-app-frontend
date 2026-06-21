@@ -1,7 +1,5 @@
-// Substitua TODO o conteúdo do arquivo pelo código abaixo
-
 import React, { useState, useEffect } from 'react';
-import { ChevronRight, Plus, Trash2, Lock, LogOut, Eye, EyeOff, Loader, RefreshCw, Settings, Copy, Calendar, User, FileText } from 'lucide-react';
+import { Trash2, Lock, LogOut, Eye, EyeOff, Loader, RefreshCw, Settings, Copy, User, FileText, Share2 } from 'lucide-react';
 
 const LegalProcessDashboardV3 = () => {
   const [mode, setMode] = useState('login');
@@ -91,6 +89,24 @@ const LegalProcessDashboardV3 = () => {
     }
   };
 
+  // ===== SHARE WHATSAPP =====
+  // Usa Web Share API no celular (abre menu nativo) ou wa.me no desktop
+  const shareViaWhatsApp = async (client) => {
+    const { whatsapp } = generateShareMessage(client);
+
+    if (navigator.share) {
+      try {
+        await navigator.share({ text: whatsapp });
+        return;
+      } catch (e) {
+        if (e.name === 'AbortError') return; // usuário cancelou
+      }
+    }
+
+    // Fallback: abre WhatsApp Web com mensagem preenchida
+    window.open(`https://wa.me/?text=${encodeURIComponent(whatsapp)}`, '_blank');
+  };
+
   // ===== LOGIN ADMIN =====
   const handleAdminLogin = async (e) => {
     e.preventDefault();
@@ -157,10 +173,7 @@ const LegalProcessDashboardV3 = () => {
     }
     setLoading(true);
     try {
-      // 1. Busca dados na CNJ
       const processData = await api('POST', '/api/search-process', { processNumber: newProcessNumber });
-
-      // 2. Salva no banco
       const saved = await api('POST', '/api/processes', {
         id: generateToken(),
         clientId: selectedClientForProcess,
@@ -168,7 +181,6 @@ const LegalProcessDashboardV3 = () => {
         ...processData,
         createdAt: new Date().toISOString()
       });
-
       setProcesses(prev => [saved, ...prev]);
       setNewProcessNumber('');
       setSelectedClientForProcess('');
@@ -369,28 +381,55 @@ const LegalProcessDashboardV3 = () => {
               <div className="bg-white rounded-lg p-6 w-full max-w-lg my-8">
                 <h2 className="text-xl font-bold mb-4">Compartilhar com {showShareModal.name}</h2>
                 <div className="space-y-4">
+
+                  {/* Código de acesso */}
                   <div className="p-4 bg-blue-50 rounded-lg border border-blue-200">
-                    <p className="text-sm font-semibold mb-2">Código de Acesso:</p>
-                    <div className="flex gap-2">
-                      <code className="flex-1 bg-white px-3 py-2 rounded border font-mono text-sm break-all">{code}</code>
-                      <button onClick={() => copyToClipboard(code, 'Código copiado!')} className="bg-blue-600 text-white px-3 py-2 rounded"><Copy size={16} /></button>
+                    <p className="text-sm font-semibold mb-2">🔑 Código de Acesso:</p>
+                    <div className="flex gap-2 items-center">
+                      <code className="flex-1 bg-white px-3 py-2 rounded border font-mono text-sm break-all select-all">
+                        {code}
+                      </code>
+                      <button
+                        onClick={() => copyToClipboard(code, 'Código copiado!')}
+                        className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded flex items-center gap-1 text-sm whitespace-nowrap"
+                      >
+                        <Copy size={14} /> Copiar
+                      </button>
                     </div>
+                    <p className="text-xs text-slate-500 mt-2">💡 Toque no código para selecionar e copiar manualmente</p>
                   </div>
+
+                  {/* WhatsApp — usa Web Share API no celular */}
                   <div className="p-4 bg-green-50 rounded-lg border border-green-200">
-                    <p className="text-sm font-semibold mb-2">📱 WhatsApp:</p>
-                    <textarea readOnly value={whatsapp} className="w-full px-3 py-2 rounded border text-xs h-24 bg-white resize-none" />
-                    <button onClick={() => copyToClipboard(whatsapp, 'Mensagem copiada!')} className="w-full mt-2 bg-green-600 text-white font-semibold py-2 rounded flex items-center justify-center gap-2">
-                      <Copy size={16} /> Copiar Mensagem WhatsApp
+                    <p className="text-sm font-semibold mb-3">📱 Enviar pelo WhatsApp:</p>
+                    <button
+                      onClick={() => shareViaWhatsApp(showShareModal)}
+                      className="w-full bg-green-600 hover:bg-green-700 text-white font-semibold py-3 rounded-lg flex items-center justify-center gap-2 text-base"
+                    >
+                      <Share2 size={18} /> Compartilhar via WhatsApp
                     </button>
+                    <p className="text-xs text-slate-500 mt-2 text-center">
+                      No celular abre o menu nativo • No computador abre o WhatsApp Web
+                    </p>
                   </div>
+
+                  {/* Email */}
                   <div className="p-4 bg-purple-50 rounded-lg border border-purple-200">
-                    <p className="text-sm font-semibold mb-2">📧 Email:</p>
-                    <textarea readOnly value={email} className="w-full px-3 py-2 rounded border text-xs h-20 bg-white resize-none" />
-                    <button onClick={() => copyToClipboard(email, 'Email copiado!')} className="w-full mt-2 bg-purple-600 text-white font-semibold py-2 rounded flex items-center justify-center gap-2">
+                    <p className="text-sm font-semibold mb-2">📧 Mensagem para Email:</p>
+                    <textarea readOnly value={email}
+                      className="w-full px-3 py-2 rounded border text-xs h-20 bg-white resize-none" />
+                    <button
+                      onClick={() => copyToClipboard(email, 'Email copiado!')}
+                      className="w-full mt-2 bg-purple-600 hover:bg-purple-700 text-white font-semibold py-2 rounded flex items-center justify-center gap-2"
+                    >
                       <Copy size={16} /> Copiar Email
                     </button>
                   </div>
-                  <button onClick={() => setShowShareModal(null)} className="w-full bg-slate-300 text-slate-900 font-semibold py-2 rounded">Fechar</button>
+
+                  <button onClick={() => setShowShareModal(null)}
+                    className="w-full bg-slate-300 hover:bg-slate-400 text-slate-900 font-semibold py-2 rounded">
+                    Fechar
+                  </button>
                 </div>
               </div>
             </div>
@@ -408,7 +447,9 @@ const LegalProcessDashboardV3 = () => {
                 <input type="email" placeholder="Email" value={newClient.email}
                   onChange={e => setNewClient({ ...newClient, email: e.target.value })}
                   className="w-full px-3 py-2 border rounded outline-none text-sm" />
-                <button type="submit" className="w-full bg-blue-700 text-white font-semibold py-2 rounded text-sm">Adicionar Cliente</button>
+                <button type="submit" className="w-full bg-blue-700 text-white font-semibold py-2 rounded text-sm">
+                  Adicionar Cliente
+                </button>
               </form>
 
               <div className="mt-6 pt-6 border-t border-slate-200">
@@ -422,11 +463,13 @@ const LegalProcessDashboardV3 = () => {
                           <p className="text-xs text-slate-600">{client.email}</p>
                           <p className="text-xs text-slate-500 mt-1">{clientProcesses(client.id).length} processo(s)</p>
                         </div>
-                        <button onClick={() => handleDeleteClient(client.id)} className="text-red-600"><Trash2 size={14} /></button>
+                        <button onClick={() => handleDeleteClient(client.id)} className="text-red-600 ml-2">
+                          <Trash2 size={14} />
+                        </button>
                       </div>
                       <button onClick={() => setShowShareModal(client)}
-                        className="w-full mt-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold py-1 rounded">
-                        Compartilhar
+                        className="w-full mt-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold py-1.5 rounded flex items-center justify-center gap-1">
+                        <Share2 size={12} /> Compartilhar
                       </button>
                     </div>
                   ))}
@@ -470,8 +513,12 @@ const LegalProcessDashboardV3 = () => {
                             {proc.grau && <p className="text-xs text-blue-600 mt-1">{proc.grau}</p>}
                           </div>
                           <div className="flex gap-2">
-                            <button onClick={() => handleRefreshProcess(proc.id)} className="text-blue-600"><RefreshCw size={15} className={loading ? 'animate-spin' : ''} /></button>
-                            <button onClick={() => handleDeleteProcess(proc.id)} className="text-red-600"><Trash2 size={15} /></button>
+                            <button onClick={() => handleRefreshProcess(proc.id)} className="text-blue-600" title="Atualizar">
+                              <RefreshCw size={15} className={loading ? 'animate-spin' : ''} />
+                            </button>
+                            <button onClick={() => handleDeleteProcess(proc.id)} className="text-red-600" title="Excluir">
+                              <Trash2 size={15} />
+                            </button>
                           </div>
                         </div>
                       </div>
